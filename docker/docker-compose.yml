@@ -161,6 +161,13 @@ services:
       BOOTSTRAP_SERVERS: kafka:29092
     command: ["python", "-m", "consumer.jobs.silver_transform"]
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python3", "-c",
+        "import os,time; base='/app/lakehouse/silver'; files=[os.path.join(r,f) for r,_,fs in os.walk(base) for f in fs if f.endswith('.parquet')]; latest=max((os.path.getmtime(p) for p in files),default=0); exit(0 if time.time()-latest<300 else 1)"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
 
   # -----------------------------------------------------------
   # 8. Job Gold
@@ -178,6 +185,13 @@ services:
       - ../lakehouse:/app/lakehouse
     command: ["python", "-m", "consumer.jobs.gold_aggregations"]
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python3", "-c",
+        "import os,time; base='/app/lakehouse/gold'; files=[os.path.join(r,f) for r,_,fs in os.walk(base) for f in fs if f.endswith('.parquet')]; latest=max((os.path.getmtime(p) for p in files),default=0); exit(0 if time.time()-latest<600 else 1)"]
+      interval: 120s
+      timeout: 10s
+      retries: 3
+      start_period: 180s
 
   # -----------------------------------------------------------
   # 9. Dashboard Streamlit  (http://localhost:8501)

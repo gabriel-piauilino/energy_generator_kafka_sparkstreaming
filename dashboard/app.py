@@ -272,17 +272,6 @@ def load_parquet_latest(path: Path, n_files: int = 60) -> pd.DataFrame:
     return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
 
-@st.cache_data(ttl=5)
-def load_gold(path: Path) -> pd.DataFrame:
-    df = load_parquet_latest(path, n_files=100)
-    if df.empty:
-        return df
-    if "window_start" in df.columns:
-        df["window_start"] = pd.to_datetime(df["window_start"], utc=True)
-        df["window_end"]   = pd.to_datetime(df["window_end"],   utc=True)
-        df = df.sort_values("window_start", ascending=False)
-    return df
-
 
 def _safe_rglob_parquet(path: Path):
     """rglob de *.parquet ignorando _temporary/_spark_metadata e arquivos sumidos."""
@@ -303,6 +292,35 @@ def _safe_rglob_parquet(path: Path):
 def count_parquet_files(path: Path) -> int:
     if not path.exists(): return 0
     return len(_safe_rglob_parquet(path))
+
+
+@st.cache_data(ttl=5)
+def load_gold(path: Path) -> pd.DataFrame:
+    """Lê TODOS os parquets Gold (poucos arquivos — 1 por usina por batch)."""
+    if not path.exists():
+        return pd.DataFrame()
+    files = _safe_rglob_parquet(path)
+    if not files:
+        return pd.DataFrame()
+    frames = []
+    for f in files:
+        try:
+            df = pd.read_parquet(f)
+            for col, val in _extract_partition_values(f, path).items():
+                if col not in df.columns:
+                    df[col] = val
+            frames.append(df)
+        except Exception:
+            pass
+    if not frames:
+        return pd.DataFrame()
+    out = pd.concat(frames, ignore_index=True)
+    if "window_start" in out.columns:
+        out["window_start"] = pd.to_datetime(out["window_start"], utc=True, errors="coerce")
+        out["window_end"]   = pd.to_datetime(out["window_end"],   utc=True, errors="coerce")
+        out = out.dropna(subset=["window_start"])
+        out = out.sort_values("window_start", ascending=False)
+    return out
 
 
 def _assign_usina_colors(usinas: list) -> dict:
@@ -402,6 +420,8 @@ def render_pipeline_status(n_silver, n_gold, n_silver_rec, n_gold_rec):
     g_cls  = "ok"   if n_gold > 0   else "warn"
     s_icon = "●" if n_silver > 0 else "○"
     g_icon = "●" if n_gold > 0   else "○"
+    # Gold: mostrar janelas únicas (usina × window) em vez de linhas brutas
+    gold_label = f"{n_gold} files · <b>{n_gold_rec:,}</b> agregações" if n_gold_rec > 0 else f"{n_gold} files · aguardando..."
     st.markdown(f"""
     <div class="pipe-bar">
         <span><span class="ok">●</span> <b>Simulator</b></span>
@@ -410,7 +430,7 @@ def render_pipeline_status(n_silver, n_gold, n_silver_rec, n_gold_rec):
         <span class="sep">→</span>
         <span><span class="{s_cls}">{s_icon}</span> <b>Bronze→Silver</b> {n_silver} files · <b>{n_silver_rec:,}</b> rows read</span>
         <span class="sep">→</span>
-        <span><span class="{g_cls}">{g_icon}</span> <b>Gold</b> {n_gold} files · <b>{n_gold_rec:,}</b> aggs read</span>
+        <span><span class="{g_cls}">{g_icon}</span> <b>Gold</b> {gold_label}</span>
         <span class="ts">updated {datetime.now().strftime('%H:%M:%S')}</span>
     </div>
     """, unsafe_allow_html=True)
@@ -696,17 +716,32 @@ def render_alerts_panel(df_gold: pd.DataFrame, df_silver: pd.DataFrame, colors: 
         st.caption("Últimas anomalias detectadas · Silver")
         COLS = ["event_ts","usina_id","tipo_anomalia","nivel_alerta",
                 "potencia_mw","eficiencia","temperatura_turbina_c","vibracao_mm_s"]
-        if not df_silver.empty and "anomalia" in df_silver.columns:
-            anom = df_silver[df_silver["anomalia"]==True].copy()
+
+        # Carrega mais arquivos Silver para ter cobertura de anomalias (prob ~2.5%)
+        df_anom_src = load_parquet_latest(SILVER_PATH, n_files=500)
+
+        if not df_anom_src.empty and "anomalia" in df_anom_src.columns:
+            col_a = df_anom_src["anomalia"]
+            if col_a.dtype == object or col_a.dtype.name == "string":
+                mask = col_a.astype(str).str.upper().isin(["TRUE", "1"])
+            else:
+                mask = col_a.fillna(False).astype(bool)
+            anom = df_anom_src[mask].copy()
+
             if not anom.empty:
-                anom  = anom.sort_values("event_ts", ascending=False).head(25)
+                if "event_ts" in anom.columns:
+                    anom["event_ts"] = pd.to_datetime(anom["event_ts"], utc=True, errors="coerce")
+                    anom = anom.sort_values("event_ts", ascending=False)
+                anom = anom.head(30)
                 exist = [c for c in COLS if c in anom.columns]
                 ren   = {"event_ts":"Time","usina_id":"Usina","tipo_anomalia":"Tipo",
                          "nivel_alerta":"Level","potencia_mw":"MW","eficiencia":"η",
                          "temperatura_turbina_c":"°C","vibracao_mm_s":"Vib"}
                 disp  = anom[exist].rename(columns=ren).copy()
                 if "Time" in disp.columns:
-                    disp["Time"] = pd.to_datetime(disp["Time"]).dt.strftime("%H:%M:%S")
+                    disp["Time"] = pd.to_datetime(disp["Time"], errors="coerce").dt.strftime("%H:%M:%S")
+                for fc in disp.select_dtypes(include=["float64","float32"]).columns:
+                    disp[fc] = disp[fc].round(3)
 
                 def _style(val):
                     return {
@@ -717,13 +752,20 @@ def render_alerts_panel(df_gold: pd.DataFrame, df_silver: pd.DataFrame, colors: 
 
                 try:
                     styled = disp.style.map(_style, subset=["Level"]) if "Level" in disp.columns else disp.style
-                    st.dataframe(styled, use_container_width=True, height=250)
+                    st.dataframe(styled, use_container_width=True, height=260)
                 except Exception:
-                    st.dataframe(disp, use_container_width=True, height=250)
+                    st.dataframe(disp, use_container_width=True, height=260)
+
+                n_crit = int((anom.get("nivel_alerta", pd.Series()) == "CRITICO").sum()) if "nivel_alerta" in anom.columns else 0
+                n_aten = int((anom.get("nivel_alerta", pd.Series()) == "ATENCAO").sum()) if "nivel_alerta" in anom.columns else 0
+                ca, cb = st.columns(2)
+                ca.metric("🔴 Críticos (amostra)", n_crit)
+                cb.metric("🟡 Atenção (amostra)",  n_aten)
             else:
-                st.success("✅ Nenhuma anomalia recente detectada.")
+                st.success("✅ Nenhuma anomalia nos arquivos Silver carregados.")
+                st.caption(f"Verificados: {len(df_anom_src):,} registros em {min(500, count_parquet_files(SILVER_PATH))} arquivos")
         else:
-            st.info("Aguardando dados Silver...")
+            st.info("Aguardando dados Silver com coluna `anomalia`...")
 
 
 def render_correlation(df_kpi: pd.DataFrame, colors: dict):
@@ -781,12 +823,22 @@ def render_gold_table(df5: pd.DataFrame, df1h: pd.DataFrame):
         if df.empty: st.info("Sem dados ainda."); return
         exist = [c for c in COLS if c in df.columns]
         disp  = df[exist].head(200).copy()
-        for c in disp.select_dtypes("float").columns:
+        # Formata window_start legível
+        if "window_start" in disp.columns:
+            disp["window_start"] = pd.to_datetime(disp["window_start"], errors="coerce").dt.strftime("%H:%M %d/%m")
+        # Arredonda floats
+        for c in disp.select_dtypes(include=["float64","float32"]).columns:
             disp[c] = disp[c].round(4)
+        # Sanitiza ProgressColumn — NaN/Inf/out-of-range crash React #185
+        for c in ["score_saude", "oee_medio"]:
+            if c in disp.columns:
+                disp[c] = pd.to_numeric(disp[c], errors="coerce").fillna(0.0).clip(0.0, 1.0)
+        if "taxa_criticos_pct" in disp.columns:
+            disp["taxa_criticos_pct"] = pd.to_numeric(disp["taxa_criticos_pct"], errors="coerce").fillna(0.0)
         st.dataframe(disp, use_container_width=True, height=380,
             column_config={
-                "score_saude":      st.column_config.ProgressColumn("Score Saúde",  min_value=0, max_value=1),
-                "oee_medio":        st.column_config.ProgressColumn("OEE",          min_value=0, max_value=1),
+                "score_saude":      st.column_config.ProgressColumn("Score Saúde",  min_value=0, max_value=1, format="%.3f"),
+                "oee_medio":        st.column_config.ProgressColumn("OEE",          min_value=0, max_value=1, format="%.3f"),
                 "taxa_criticos_pct":st.column_config.NumberColumn("Críticos %",     format="%.2f%%"),
             })
 

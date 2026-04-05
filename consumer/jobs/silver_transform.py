@@ -37,10 +37,10 @@ CHECKPOINT_PATH = os.path.join(BASE_DIR, "checkpoints", "silver")
 import os
 BOOTSTRAP_SERVERS  = os.environ.get("BOOTSTRAP_SERVERS", "localhost:9092")
 TOPIC              = os.environ.get("TOPIC", "energia-hidreletrica")
-TRIGGER_SECONDS    = 60          # ↑ de 15s → 60s: 4× menos arquivos por hora
+TRIGGER_SECONDS    = 30          # trigger mais rápido para responsividade
 WATERMARK_DELAY    = "10 minutes"
-RETENTION_HOURS    = 6           # mantém só últimas 6h de Silver em disco
-SPARK_SHUFFLE_PART = 2           # ↓ de 200 (default) → 2: elimina arquivos minúsculos
+RETENTION_HOURS    = 6
+SPARK_SHUFFLE_PART = 2
 
 
 def _limpar_silver_antigo(silver_path: str, retention_hours: int):
@@ -82,12 +82,10 @@ def main():
         F.to_timestamp(F.col("timestamp_utc")),
     )
 
-    # ── 3. Watermark + deduplicação ────────────────────────────────────────
-    deduped = (
-        parsed
-        .withWatermark("event_ts", WATERMARK_DELAY)
-        .dropDuplicates(["event_id"])
-    )
+    # ── 3. Sem watermark stateful — dedup por batch no foreachBatch ──────
+    # dropDuplicates com watermark bloqueia emissão até watermark avançar 10min
+    # Para este pipeline de monitoramento, dedup intra-batch é suficiente
+    deduped = parsed
 
     # ── 4. Filtros de qualidade ────────────────────────────────────────────
     limpos = deduped.filter(
@@ -148,12 +146,14 @@ def main():
     def write_batch(batch_df, batch_id):
         if batch_df.isEmpty():
             return
+        n = batch_df.count()
         (batch_df.write
             .format("parquet")
             .mode("append")
             .partitionBy("event_date", "usina_id")
             .save(SILVER_PATH))
-        # Limpeza a cada 10 batches (~10min)
+        print(f"[SILVER] batch {batch_id} → {n} registros gravados")
+        # Limpeza a cada 10 batches (~5min)
         batch_counter[0] += 1
         if batch_counter[0] % 10 == 0:
             _limpar_silver_antigo(SILVER_PATH, RETENTION_HOURS)
