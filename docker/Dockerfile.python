@@ -1,0 +1,29 @@
+# ── Imagem leve para o Producer e Dashboard ──────────────────
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Dependências do sistema mínimas
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    && rm -rf /var/lib/apt/lists/*
+
+# Instala dependências Python (sem PySpark — imagem menor)
+COPY requirements.txt .
+RUN pip install --no-cache-dir \
+    kafka-python==2.0.2 \
+    streamlit==1.35.0 \
+    plotly==5.22.0 \
+    pandas==2.2.2 \
+    pyarrow==16.1.0 \
+    python-dotenv==1.0.1 \
+    numpy==1.26.4
+
+# Copia todo o código do repo
+COPY . .
+
+# Lê variáveis de ambiente do docker-compose para sobrescrever config.py
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+CMD ["python", "-m", "producer.simulator"]

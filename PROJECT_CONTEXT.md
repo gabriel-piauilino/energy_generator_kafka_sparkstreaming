@@ -39,7 +39,7 @@ com dados de vazão, potência, eficiência e detecção de anomalias em usinas.
 ## 📁 Estrutura de Pastas (Alvo)
 
 ```
-kafka_streaming_analytics/
+energy_generator_kafka_sparkstreaming/   ← raiz do repositório Git
 │
 ├── producer/
 │   ├── iot_hidro_eletric_simulator.py   # Simulador principal
@@ -222,22 +222,82 @@ kafka_streaming_analytics/
 
 ---
 
-## 🛤️ Roadmap / Próximos Passos
+## 🐳 Execução com Docker
 
-- [ ] Reorganizar estrutura de pastas (mover simulador para `producer/`)
-- [ ] Criar `producer/config.py` com constantes extraídas
-- [ ] Criar `consumer/schemas/spark_schemas.py` com StructType PySpark
-- [ ] Implementar `bronze_ingest.py`
-- [ ] Implementar `silver_transform.py`
-- [ ] Implementar `gold_aggregations.py`
-- [ ] Criar `docker-compose.yml` com Kafka + Zookeeper
-- [ ] Adicionar `requirements.txt` e `pyproject.toml`
+### Pré-requisitos
+- Docker Desktop rodando
+- PowerShell (Windows) ou bash (Linux/Mac)
+
+### Comandos
+
+```powershell
+# Da raiz do repo (energy_generator_kafka_sparkstreaming/)
+
+# Subir tudo (primeira vez — faz build das imagens)
+.\start.ps1 -Build
+
+# Subir tudo (após primeiro build)
+.\start.ps1
+
+# Só infra Kafka (para testar producer localmente)
+.\start.ps1 -Infra
+
+# Ver status dos containers
+.\start.ps1 -Status
+
+# Logs em tempo real de todos os serviços
+.\start.ps1 -Logs
+
+# Derrubar tudo (inclusive volumes)
+.\start.ps1 -Down
+```
+
+### URLs
+| Serviço | URL |
+|---|---|
+| 📊 Dashboard Streamlit | http://localhost:8501 |
+| 🔎 Kafka UI | http://localhost:9090 |
+| 📡 Kafka Broker (externo) | localhost:9092 |
+
+### Ordem de inicialização (automática)
+```
+Zookeeper → Kafka (healthy) → topic-init → Kafka-UI
+                                         → Bronze Job
+                                         → Silver Job
+                                         → Gold Job
+                                         → Simulator
+                                         → Dashboard
+```
+
+### Variáveis de ambiente configuráveis (docker-compose / sidebar do dashboard)
+| Variável | Padrão | Descrição |
+|---|---|---|
+| `BOOTSTRAP_SERVERS` | `kafka:29092` | Broker interno Docker |
+| `TOPIC` | `energia-hidreletrica` | Tópico Kafka |
+| `EVENTS_PER_SECOND` | `60` | Taxa do simulador |
+| `ANOMALY_PROBABILITY` | `0.025` | P(anomalia) por ciclo |
+| `MAINTENANCE_PROBABILITY` | `0.003` | P(manutenção) por ciclo |
+
+---
+
+## 🛤️ Roadmap
+
+- [x] Reorganizar estrutura de pastas
+- [x] `producer/config.py` com env vars + fallback local
+- [x] `producer/simulator.py` — Usinas Eletrobras reais
+- [x] `consumer/schemas/spark_schemas.py` com StructType PySpark
+- [x] `consumer/jobs/bronze_ingest.py`
+- [x] `consumer/jobs/silver_transform.py`
+- [x] `consumer/jobs/gold_aggregations.py`
+- [x] `docker/docker-compose.yml` — stack completo
+- [x] `docker/Dockerfile.python` — producer + dashboard
+- [x] `docker/Dockerfile.spark` — jobs Spark
+- [x] `start.ps1` — script de start/stop/logs
+- [x] `dashboard/app.py` — Streamlit com configuração e visualização
 - [ ] Testes unitários do simulador
-- [ ] CI com GitHub Actions
 - [ ] (Futuro) Delta Lake no lugar de Parquet puro
 - [ ] (Futuro) Schema Registry + Avro
-- [ ] (Futuro) Orquestração com Prefect ou Airflow
-- [ ] (Futuro) Dashboard com Spark SQL sobre tabelas Gold
+- [ ] (Futuro) Dashboard: gráfico de série histórica Gold 1h
 
 ---
 

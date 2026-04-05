@@ -1,0 +1,27 @@
+# Ambiente virtual Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# Git
+.git/
+.gitignore
+
+# Lakehouse local (volumes Docker cuidam disso em container)
+lakehouse/
+
+# Arquivos legados
+energy_generator_kafka_sparkstreaming/
+
+# Logs e temporários
+*.log
+*.tmp
+.DS_Store

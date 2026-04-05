@@ -1,2 +1,45 @@
+# ── Lakehouse (dados gerados em runtime — NÃO versionar) ──────────────────────
+lakehouse/
+checkpoints/
+
+# ── Python ────────────────────────────────────────────────────────────────────
 __pycache__/
+*.py[cod]
 *.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+.venv/
+venv/
+env/
+.env
+
+# ── Jupyter ───────────────────────────────────────────────────────────────────
+.ipynb_checkpoints/
+*.ipynb
+
+# ── IDEs ──────────────────────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.iml
+*.iws
+*.ipr
+.DS_Store
+Thumbs.db
+
+# ── Docker volumes / temporários ─────────────────────────────────────────────
+*.log
+*.pid
+
+# ── Dashboard config de runtime ───────────────────────────────────────────────
+dashboard/.sim_config.json
+
+# ── Spark / Hadoop temporários ────────────────────────────────────────────────
+derby.log
+metastore_db/
+spark-warehouse/

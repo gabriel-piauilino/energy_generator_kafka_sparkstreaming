@@ -1,0 +1,41 @@
+# ── Imagem PySpark para os jobs Bronze / Silver / Gold ────────
+FROM python:3.11-slim
+
+USER root
+
+WORKDIR /app
+
+# Java (necessário para o Spark) — nome correto no Debian Bookworm
+RUN echo 'Acquire::Retries "5";' > /etc/apt/apt.conf.d/99retries && \
+    apt-get update && apt-get install -y --no-install-recommends \
+    default-jre-headless \
+    gcc \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Detecta JAVA_HOME dinamicamente (funciona em amd64 e arm64)
+RUN echo "export JAVA_HOME=$(dirname $(dirname $(readlink -f $(which java))))" >> /etc/environment && \
+    echo "JAVA_HOME=$(dirname $(dirname $(readlink -f $(which java))))" >> /etc/environment
+ENV JAVA_HOME=/usr/lib/jvm/default-java
+
+# Dependências Python
+RUN pip install --no-cache-dir \
+    pyspark==3.5.0 \
+    kafka-python==2.0.2 \
+    pyarrow==16.1.0 \
+    python-dotenv==1.0.1
+
+# Jar do conector Kafka — baixado uma vez durante o build (não em runtime)
+RUN JAVA_HOME=/usr/lib/jvm/default-java python -c "\
+from pyspark.sql import SparkSession; \
+SparkSession.builder \
+  .config('spark.jars.packages','org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0') \
+  .getOrCreate().stop()" || true
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+# Copia todo o código do repo
+COPY . .
+
+CMD ["python", "-m", "consumer.jobs.bronze_ingest"]
